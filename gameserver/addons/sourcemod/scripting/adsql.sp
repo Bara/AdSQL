@@ -52,12 +52,14 @@
 
 #include <sourcemod>
 #include <sdktools>
+#include <multicolors>
 #undef REQUIRE_PLUGIN
 #include <adminmenu>
 
 #define PLUGIN_VERSION "2.3.1"
 #define CVAR_DISABLED "OFF"
 #define CVAR_ENABLED  "ON"
+#define DATABASE_ENTRY "adsql"
 
 new Handle:hAdminMenu = INVALID_HANDLE;
 new Handle:hDatabase = INVALID_HANDLE;
@@ -72,7 +74,6 @@ new bool:bMapJustStarted = false;
 // this stuff is necessary to make the cvars we *WANT* public
 // show up - busted a2s_rules on linux (from hlstatsx.sp)
 // BIG THANK YOU TO THE HLSTATSX:CE folks for the coding example
-new Handle:adsql_version = INVALID_HANDLE;
 new Handle:adsql_serverid = INVALID_HANDLE;
 
 new Handle:adsql_debug = INVALID_HANDLE;
@@ -89,12 +90,9 @@ new g_Current;
 new String:SrvIDFile[256];
 new idFileTime = 0;
 
-//static String:g_sSColors[4][13]  = {"{DEFAULT}","{LIGHTGREEN}", "{TEAM}", "{GREEN}"};
 static String:g_sSColors[5][13]  = {"{DEFAULT}","{LIGHTGREEN}", "{TEAM}", "{GREEN}", "{OLIVE}"};
-static String:g_sTColors[13][12] = {"{WHITE}",       "{RED}",        "{GREEN}",   "{BLUE}",    "{YELLOW}",    "{PURPLE}",    "{CYAN}",      "{ORANGE}",    "{PINK}",      "{OLIVE}",     "{LIME}",      "{VIOLET}",    "{LIGHTBLUE}"};
-//static g_iSColors[4]             = {1, 3, 3, 4};
 static g_iSColors[5]             = {1, 3, 3, 4, 5};
-static g_iTColors[13][3]         = {{255, 255, 255}, {255, 0, 0},    {0, 255, 0}, {0, 0, 255}, {255, 255, 0}, {255, 0, 255}, {0, 255, 255}, {255, 128, 0}, {255, 0, 128}, {128, 255, 0}, {0, 255, 128}, {128, 0, 255}, {0, 128, 255}};
+
 
 new String:GameName[64];
 new String:GameSearchName[64];
@@ -107,30 +105,28 @@ new String:g_game[1024][64];
 
 public Plugin:myinfo =
 {
-	name = "AdsQL Advertisements System",
-	author = "PharaohsPaw",
-	description = "Displays server ads from a MySQL database",
+	name = "[Outbreak] MySQL Ads",
+	author = "Bara",
+	description = "",
 	version = PLUGIN_VERSION,
-	url = "http://www.pwng.net"
+	url = "outbreak.community"
 }
 
 public OnPluginStart()
 {
 	RegAdminCmd("sm_reloadads", Admin_ReloadAds, ADMFLAG_CONVARS, "- Reload the Ads ");
 	
-	hInterval = CreateConVar("adsql_interval", "45", "Time interval (seconds) between ads displayed", FCVAR_PLUGIN);
+	hInterval = CreateConVar("adsql_interval", "45", "Time interval (seconds) between ads displayed");
 
 	HookConVarChange(hInterval, ConVarChange_Interval);
 
 	// our two public cvars:
 	
-	adsql_version = CreateConVar("adsql_version", PLUGIN_VERSION, "AdsQL Plugin Version", FCVAR_PLUGIN|FCVAR_NOTIFY|FCVAR_SPONLY);
-	
 	// make this one public because its useful to see it in HLSW etc.
-	adsql_serverid = CreateConVar("adsql_serverid", "", "ID string to uniquely identify this server when loading ads.\nThe SUPPORTED place to define this is:\n\n  * (sm_basepath)/configs/adsql/serverid.txt *\n\nto properly support running >1 server per dedicated server \"tree\".\nSee install docs and FAQ for details.", FCVAR_PLUGIN|FCVAR_NOTIFY|FCVAR_SPONLY);
+	adsql_serverid = CreateConVar("adsql_serverid", "", "ID string to uniquely identify this server when loading ads.\nThe SUPPORTED place to define this is:\n\n  * (sm_basepath)/configs/adsql/serverid.txt *\n\nto properly support running >1 server per dedicated server \"tree\".\nSee install docs and FAQ for details.", FCVAR_NOTIFY|FCVAR_SPONLY);
 
 	// hey, why not, lets make a debug cvar...
-	adsql_debug = CreateConVar("adsql_debug", "0", "Enable debug logging for AdsQL plugin: 0=off, 1=on", FCVAR_PLUGIN);
+	adsql_debug = CreateConVar("adsql_debug", "1", "Enable debug logging for AdsQL plugin: 0=off, 1=on");
 
 
 	// init GameSrvID in case it never gets defined (no serverid.txt)
@@ -227,8 +223,23 @@ public OnPluginStart()
 	// The databases.cfg section we read our config from --
 	// I could change this but we want to make it easy for
 	// existing users of the sm_adsmysql plugin to switch:
+	if(SQL_CheckConfig(DATABASE_ENTRY))
+	{
+		if (GetConVarBool(adsql_debug))
 
-	SQL_TConnect(DBConnect, "admintools");
+			LogMessage("[AdsQL] - Found databases.cfg entry '%s'.", DATABASE_ENTRY);
+		
+		SQL_TConnect(DBConnect, DATABASE_ENTRY);
+	}
+	else
+	{
+		if (GetConVarBool(adsql_debug))
+
+			LogMessage("[AdsQL] - Can't found databases.cfg entry '%s'.", DATABASE_ENTRY);
+		
+		SetFailState("Can't found databases.cfg entry '%s'.", DATABASE_ENTRY);
+		return;
+	}
 
 	// load our configuration from cfg/sourcemod/adsql.cfg
 	// auto-create a default adsql.cfg is false because
@@ -246,13 +257,7 @@ public OnPluginStart()
  */
 public OnConfigsExecuted()
 {
-	if (GuessSDKVersion() != SOURCE_SDK_EPISODE2VALVE)
-		return;
-
 	decl String:buffer[128];
-
-	GetConVarString(adsql_version, buffer, sizeof(buffer));
-	SetConVarString(adsql_version, buffer);
 
 	GetConVarString(adsql_serverid, buffer, sizeof(buffer));
 	SetConVarString(adsql_serverid, buffer);
@@ -398,6 +403,21 @@ public DBConnect(Handle:owner, Handle:hndl, const String:error[], any:data)
 
 	hDatabase = hndl;
 	LogMessage("[AdsQL] - Connected Successfully to Database");
+	
+	if (SQL_SetCharset(hDatabase, "utf8mb4"))
+	{
+		if (GetConVarBool(adsql_debug))
+		{
+			LogMessage("[AdsQL] - SET CHARSET 'utf8mb4' query succeeded.");
+		}
+	}
+	else
+	{
+		if (GetConVarBool(adsql_debug))
+		{
+			LogMessage("[AdsQL] - SET CHARSET 'utf8mb4' query FAILED!");
+		}
+	}
 
 	//LogAction(0, 0, "[AdsQL] - Connected Successfully to Database");
 }
@@ -462,38 +482,17 @@ public Action:SetupAds(Handle:timer, any:client)
 	
 	g_Current = 0;
 
-	/* Set UTF8 DB Session parameters before *every time* we load ads	*/
-
-	decl String:utfquery[32];
-
-	Format(utfquery, sizeof(utfquery), "SET NAMES 'utf8';");
-
-	if (SQL_FastQuery(hDatabase, utfquery, sizeof(utfquery)))
-	{
-		if (GetConVarBool(adsql_debug))
-		{
-			LogMessage("[AdsQL] - SET NAMES 'utf8' query succeeded.");
-		}
-	}
-	else
-	{
-		if (GetConVarBool(adsql_debug))
-		{
-			LogMessage("[AdsQL] - SET NAMES 'utf8' query FAILED!");
-		}
-	}
-
 	/* Now prepare our ad search query */
 
 	decl String:query[1024];
 
 	if (IsGameSrvIDEmpty())
 	{
-		Format(query, sizeof(query), "SELECT * FROM adsmysql WHERE ( game='All' OR (game LIKE '%%%s%%' AND gamesrvid='All') ) ORDER BY id;", GameSearchName);
+		Format(query, sizeof(query), "SELECT * FROM adsql WHERE ( game='All' OR (game LIKE '%%%s%%' AND gamesrvid='All') ) ORDER BY id;", GameSearchName);
 	}
 	else
 	{
-		Format(query, sizeof(query), "SELECT * FROM adsmysql WHERE ( game='All' OR (game LIKE '%%%s%%' AND gamesrvid='All') OR (game LIKE '%%%s%%' AND gamesrvid LIKE '%%%s%%') ) ORDER BY id;", GameSearchName, GameSearchName, GameSrvID);
+		Format(query, sizeof(query), "SELECT * FROM adsql WHERE ( game='All' OR (game LIKE '%%%s%%' AND gamesrvid='All') OR (game LIKE '%%%s%%' AND gamesrvid LIKE '%%%s%%') ) ORDER BY id;", GameSearchName, GameSearchName, GameSrvID);
 	}
 
 	SQL_TQuery(hDatabase, ParseAds, query, client, DBPrio_High);
@@ -671,6 +670,11 @@ public Action:Timer_DisplayAds(Handle:timer)
 {
 	decl AdminFlag:fFlagList[16], String:sBuffer[256], String:sFlags[27], String:sText[1024], String:sType[2], String:sGame[64];
 	
+	if(g_AdCount == 0)
+	{
+		return Plugin_Continue;
+	}
+	
 	if (g_Current == g_AdCount) 
 	{
 		g_Current = 0;
@@ -680,7 +684,7 @@ public Action:Timer_DisplayAds(Handle:timer)
 	if (GetConVarBool(adsql_debug))
 	{
 
-		LogMessage("[AdsQL] Firing Ad %i/%i: %s, %s, %s, %s", g_Current, g_AdCount, g_type[g_Current], g_text[g_Current], g_flags[g_Current], g_game[g_Current]);
+		LogMessage("[AdsQL] - Firing Ad %i/%i: %s, %s, %s, %s", g_Current, g_AdCount, g_type[g_Current], g_text[g_Current], g_flags[g_Current], g_game[g_Current]);
 
 	}
 	
@@ -866,39 +870,7 @@ public Action:Timer_DisplayAds(Handle:timer)
 		
 		if (StrContains(sType, "T") != -1) 
 		{
-			decl String:sColor[16];
-			new iColor = -1, iPos = BreakString(sText, sColor, sizeof(sColor));
-			
-			for (new i = 0; i < sizeof(g_sTColors); i++) 
-			{
-				if (StrEqual(sColor, g_sTColors[i])) 
-				{
-					iColor = i;
-				}
-			}
-			
-			if (iColor == -1) 
-			{
-				iPos     = 0;
-				iColor   = 0;
-			}
-			
-			new Handle:hKv = CreateKeyValues("Stuff", "title", sText[iPos]);
-			KvSetColor(hKv, "color", g_iTColors[iColor][0], g_iTColors[iColor][1], g_iTColors[iColor][2], 255);
-			KvSetNum(hKv,   "level", 1);
-			KvSetNum(hKv,   "time",  10);
-			
-			for (new i = 1, iClients = GetClientCount(); i <= iClients; i++) 
-			{
-				if (IsClientInGame(i) && !IsFakeClient(i) &&
-						((!bAdmins && !(bFlags && HasFlag(i, fFlagList))) ||
-						 bAdmins && (GetUserFlagBits(i) & ADMFLAG_GENERIC ||
-						 GetUserFlagBits(i) & ADMFLAG_ROOT))) 
-				{
-					CreateDialog(i, hKv, DialogType_Msg);
-				}
-			}
-			CloseHandle(hKv);
+			CPrintToChatAll(sText);
 		}
 		
 		if (StrContains(sType, "S") != -1) 
@@ -949,6 +921,8 @@ public Action:Timer_DisplayAds(Handle:timer)
 			}
 		}
 	}
+	
+	return Plugin_Continue;
 }
 
 bool:HasFlag(iClient, AdminFlag:fFlagList[16])
