@@ -75,7 +75,7 @@ new bool:bMapJustStarted = false;
 // show up - busted a2s_rules on linux (from hlstatsx.sp)
 // BIG THANK YOU TO THE HLSTATSX:CE folks for the coding example
 new Handle:adsql_serverid = INVALID_HANDLE;
-
+new Handle:adsql_extra = INVALID_HANDLE;
 new Handle:adsql_debug = INVALID_HANDLE;
 
 new bool:g_bTickrate = true;
@@ -124,7 +124,9 @@ public OnPluginStart()
 	
 	// make this one public because its useful to see it in HLSW etc.
 	adsql_serverid = CreateConVar("adsql_serverid", "", "ID string to uniquely identify this server when loading ads.\nThe SUPPORTED place to define this is:\n\n  * (sm_basepath)/configs/adsql/serverid.txt *\n\nto properly support running >1 server per dedicated server \"tree\".\nSee install docs and FAQ for details.", FCVAR_NOTIFY|FCVAR_SPONLY);
-
+	
+	adsql_extra = CreateConVar("adsql_extra_lines", "1", "Add extra lines per ads to get more attention?", _, true, 0.0, true, 1.0);
+	
 	// hey, why not, lets make a debug cvar...
 	adsql_debug = CreateConVar("adsql_debug", "1", "Enable debug logging for AdsQL plugin: 0=off, 1=on");
 
@@ -620,7 +622,9 @@ public ParseAds(Handle:owner, Handle:hQuery, const String:error[], any:client)
 			// the database
 			decl String:g_gamesrvid[512];
 
-			PrintToConsole(client, "[AdsQL] %i rows found", SQL_GetRowCount(hQuery));
+			if (GetConVarBool(adsql_debug))
+				LogMessage("[AdsQL] - %i rows found", SQL_GetRowCount(hQuery));
+			
 			while(SQL_FetchRow(hQuery))
 			{
 				SQL_FetchString(hQuery, 1, g_type[g_AdCount], 2);
@@ -630,7 +634,8 @@ public ParseAds(Handle:owner, Handle:hQuery, const String:error[], any:client)
 				SQL_FetchString(hQuery, 4, g_gametemp, 192);
 				SQL_FetchString(hQuery, 5, g_gamesrvid, 512);
 
-				PrintToConsole(client, "[AdsQL] Ad %i found in database: %s, %s, %s, %s [serverids: %s]", g_AdCount, g_type[g_AdCount], g_text[g_AdCount], g_flags[g_AdCount], g_gametemp, g_gamesrvid);
+				if (GetConVarBool(adsql_debug))
+					LogMessage("[AdsQL] - Ad %i found in database: %s, %s, %s, %s [serverids: %s]", g_AdCount, g_type[g_AdCount], g_text[g_AdCount], g_flags[g_AdCount], g_gametemp, g_gamesrvid);
 				
 				// NOW CLEAN UP THE GAME NAME FIELD
 				// We really should not have gotten a row with our SELECT call unless
@@ -658,6 +663,9 @@ public ParseAds(Handle:owner, Handle:hQuery, const String:error[], any:client)
 		
 		if (client > 0)
 			PrintToChat(client, "[AdsQL] Reloaded Ads");
+		
+		if (GetConVarBool(adsql_debug))
+			LogMessage("[AdsQL] - Ads parsed");
 	}
 	else
 	{
@@ -870,7 +878,20 @@ public Action:Timer_DisplayAds(Handle:timer)
 		
 		if (StrContains(sType, "T") != -1) 
 		{
+			new bool:bExtra = GetConVarBool(adsql_extra);
+			
+			if(bExtra)
+			{
+				CPrintToChatAll("{darkred}----------------------------");
+				CPrintToChatAll(" ");
+			}
 			CPrintToChatAll(sText);
+			
+			if(bExtra)
+			{
+				CPrintToChatAll(" ");
+				CPrintToChatAll("{darkred}----------------------------");
+			}
 		}
 		
 		if (StrContains(sType, "S") != -1) 
